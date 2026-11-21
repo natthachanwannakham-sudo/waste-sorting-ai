@@ -90,6 +90,8 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--accent);outline
 
   <div class="mine" id="mine" aria-live="polite"></div>
 
+  <section class="bars" id="hist" style="margin-bottom:12px"><strong>ประวัติการสแกนล่าสุด</strong><ul id="histList" style="padding-left:20px;margin:8px 0"></ul></section>
+
   <section class="bars" id="bars" aria-label="ความมั่นใจของแต่ละประเภท"></section>
   <section class="bars" id="board" style="margin-top:12px" hidden><strong>อันดับสัปดาห์นี้</strong><ol id="boardList" style="padding-left:22px;margin:8px 0"></ol><div class="note" id="resetInfo" style="margin:0"></div></section>
   <p class="note">AI ทายได้เฉพาะประเภทที่เคยเรียนรู้จากรูปตัวอย่าง หากความมั่นใจต่ำกว่า 70% ระบบจะแจ้งว่าไม่แน่ใจ</p>
@@ -154,9 +156,10 @@ async function api(params, body){
 }
 function loadScore(){
   try{ $("who").value = localStorage.getItem("wasteWho")||""; }catch(_){}
+  loadHistLocal(); renderHist();
   $("board").hidden = !useServer;
   $("resetBtn").hidden = useServer;          // โหมดฐานข้อมูลรีเซ็ตอัตโนมัติทุกวันจันทร์
-  if(useServer){ refreshMe(); refreshBoard(); return; }
+  if(useServer){ refreshMe(); refreshBoard(); refreshHist(); return; }
   try{ const s = JSON.parse(localStorage.getItem("wasteScore")||"null"); if(s) score = s; }catch(_){}
   renderScore();
 }
@@ -165,6 +168,30 @@ function renderScore(){
   $("total").textContent = score.total;
   $("mine").textContent = (student() ? student()+" · " : "")+"คะแนนสะสมสัปดาห์นี้ "+score.total+" คะแนน";
   $("detail").textContent = "ถังเหลือง "+score.y+" ครั้ง · ถังเขียว "+score.g+" ครั้ง · ถังน้ำเงิน "+score.b+" ครั้ง";
+}
+let hist = [];
+const histKey = () => "wasteHist:"+student();
+function loadHistLocal(){ try{ hist = JSON.parse(localStorage.getItem(histKey())||"[]"); }catch(_){ hist = []; } }
+function renderHist(){
+  const ul = $("histList"); ul.innerHTML = "";
+  if(!hist.length){ const li=document.createElement("li"); li.textContent="ยังไม่มีรายการ"; ul.appendChild(li); return; }
+  hist.slice(0,10).forEach(h=>{
+    const d = new Date(h.t), li = document.createElement("li");
+    const when = isNaN(d) ? "" : d.toLocaleString("th-TH",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})+" · ";
+    li.textContent = when + h.name + " +" + h.pts + " คะแนน"; ul.appendChild(li);
+  });
+}
+function pushHist(name, pts){
+  hist.unshift({t:Date.now(), name:name, pts:pts}); hist = hist.slice(0,50);
+  try{ localStorage.setItem(histKey(), JSON.stringify(hist)); }catch(_){}
+  renderHist();
+}
+async function refreshHist(){
+  if(!useServer || !student()) return;
+  try{
+    const d = await api({action:"history", student:student()});
+    if(d.ok && d.items){ hist = d.items.map(i=>({t:i.t, name:BIN_NAME[i.bin]||i.bin, pts:i.pts})); renderHist(); }
+  }catch(_){}
 }
 async function refreshMe(){
   if(!useServer) return;
@@ -194,11 +221,11 @@ async function award(top){
   const info = BIN_NAME[c]+" · "+top.className;
   if(!useServer){
     score.total += pts; score[c]++; saveScore(); renderScore();
-    showToast("+"+pts+" คะแนน", info+" · รวม "+score.total+" คะแนน"); return;
+    showToast("+"+pts+" คะแนน", info+" · รวม "+score.total+" คะแนน"); pushHist(BIN_NAME[c], pts); return;
   }
   try{
     const d = await api(null, {action:"add", student:student(), bin:c});
-    if(d.ok){ score=d.score; renderScore(); showToast("+"+pts+" คะแนน", info+" · รวม "+score.total+" คะแนน"); refreshBoard(); }
+    if(d.ok){ score=d.score; renderScore(); showToast("+"+pts+" คะแนน", info+" · รวม "+score.total+" คะแนน"); pushHist(BIN_NAME[c], pts); refreshBoard(); }
     else showToast("บันทึกไม่สำเร็จ", d.error||"ลองใหม่อีกครั้ง");
   }catch(_){ showToast("บันทึกไม่สำเร็จ","ตรวจสอบอินเทอร์เน็ต"); }
 }
@@ -265,7 +292,7 @@ $("file").onchange=e=>{
   e.target.value="";
 };
 $("who").oninput=e=>{ try{ localStorage.setItem("wasteWho", e.target.value); }catch(_){} };
-$("who").onchange=refreshMe;
+$("who").onchange=()=>{ refreshMe(); loadHistLocal(); renderHist(); refreshHist(); };
 $("resetBtn").onclick=()=>{ if(confirm("ต้องการรีเซ็ตคะแนนเป็น 0 ใช่หรือไม่?")){ score={total:0,y:0,g:0,b:0}; saveScore(); renderScore(); } };
 loadScore();
 
