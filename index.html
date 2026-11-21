@@ -54,7 +54,6 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--accent);outline
 </head>
 <body>
 <main>
-  <div class="mine" id="mine" aria-live="polite"></div>
   <h1>ระบบคัดแยกขยะด้วย AI</h1>
   <p class="sub">ถือขยะให้อยู่หน้ากล้อง หรืออัปโหลดรูป แล้ว AI จะบอกว่าควรทิ้งถังไหน</p>
 
@@ -165,7 +164,6 @@ function loadScore(){
 function saveScore(){ try{ localStorage.setItem("wasteScore", JSON.stringify(score)); }catch(_){} }
 function renderScore(){
   $("total").textContent = score.total;
-  $("mine").textContent = (student() ? student()+" · " : "")+"คะแนนสะสมสัปดาห์นี้ "+score.total+" คะแนน";
   $("detail").textContent = "ถังเหลือง "+score.y+" ครั้ง · ถังเขียว "+score.g+" ครั้ง · ถังน้ำเงิน "+score.b+" ครั้ง";
 }
 let hist = [];
@@ -202,7 +200,18 @@ async function refreshBoard(){
   try{
     const d = await api({action:"board"}); if(!d.ok) return;
     const ol = $("boardList"); ol.innerHTML = "";
-    d.top.forEach(r=>{ const li=document.createElement("li"); li.textContent = r.student+" — "+r.total+" คะแนน"+(r.student===student()?" (คุณ)":""); if(r.student===student()) li.style.fontWeight="800"; ol.appendChild(li); });
+    d.top.forEach(r=>{
+      const li=document.createElement("li"), me=(r.student===student());
+      li.textContent = r.student+" — "+r.total+" คะแนน"+(me?" (คุณ)":"");
+      if(me) li.style.fontWeight="800";
+      if(r.y!==undefined){
+        const sm=document.createElement("small");
+        sm.style.cssText="display:block;font-weight:400;color:var(--mute)";
+        sm.textContent="เหลือง "+r.y+" · เขียว "+r.g+" · น้ำเงิน "+r.b+" ครั้ง";
+        li.appendChild(sm);
+      }
+      ol.appendChild(li);
+    });
     if(!d.top.length){ const li=document.createElement("li"); li.textContent="ยังไม่มีใครได้คะแนนสัปดาห์นี้"; ol.appendChild(li); }
     const when = new Date(d.resetsOn+"T00:00:00").toLocaleDateString("th-TH",{day:"numeric",month:"long"});
     $("resetInfo").textContent = "คะแนนรีเซ็ตอัตโนมัติทุกวันจันทร์ (ครั้งถัดไป "+when+")";
