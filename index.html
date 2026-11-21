@@ -10,6 +10,7 @@
 --y:#f5b800;--b:#1f4e9c;--g:#2f9e57;--r:#d64545;--n:#8a948d}
 @media (prefers-color-scheme:dark){:root{--bg:#121a15;--card:#1b2620;--ink:#eaf1ec;--mute:#a3b1a8;--line:#2d3b33;--accent:#5fc088}}
 *{box-sizing:border-box}
+[hidden]{display:none!important}
 html,body{margin:0}
 body{font-family:'Prompt',system-ui,sans-serif;background:var(--bg);color:var(--ink);padding:16px;min-height:100vh}
 main{max-width:720px;margin:0 auto}
@@ -39,6 +40,14 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--accent);outline
 .fill{height:100%;width:0;background:var(--accent);transition:width .15s}
 #msg{color:var(--r);margin-top:8px;min-height:1.4em}
 .note{color:var(--mute);font-size:.85rem;margin-top:16px}
+.score{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 16px;margin-bottom:12px;display:grid;grid-template-columns:1fr auto;gap:8px 12px;align-items:center}
+.score input{grid-column:1/-1;padding:10px 12px;border:2px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink);font:inherit}
+.score .lbl{color:var(--mute);font-size:.9rem}
+.score .total{font-size:2.6rem;font-weight:800;line-height:1;color:var(--accent)}
+.score .detail{grid-column:1/-1;color:var(--mute);font-size:.9rem}
+.score .btn{padding:8px 14px}
+#toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--accent);color:#fff;padding:14px 22px;border-radius:12px;font-weight:800;font-size:1.3rem;box-shadow:0 4px 16px #0004;z-index:9}
+#toast small{display:block;font-weight:400;font-size:.85rem;opacity:.9}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 </head>
@@ -46,6 +55,14 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--accent);outline
 <main>
   <h1>ระบบคัดแยกขยะด้วย AI</h1>
   <p class="sub">ถือขยะให้อยู่หน้ากล้อง หรืออัปโหลดรูป แล้ว AI จะบอกว่าควรทิ้งถังไหน</p>
+
+  <section class="score" aria-label="คะแนนสะสม">
+    <div><div class="lbl">คะแนนสะสมสัปดาห์นี้</div><div class="total" id="total">0</div></div>
+    <button class="btn alt" id="resetBtn">รีเซ็ตคะแนน</button>
+    <input id="who" type="text" maxlength="30" placeholder="ชื่อเล่น หรือ รหัสนักเรียน (ต้องกรอก)" aria-label="ชื่อนักเรียน">
+    <div class="detail" id="detail"></div>
+  </section>
+  <div id="toast" role="status" aria-live="polite" hidden></div>
 
   <div class="tabs" role="group" aria-label="เลือกโหมด">
     <button id="tabCam" aria-pressed="true">ใช้กล้อง</button>
@@ -71,6 +88,7 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--accent);outline
   </div>
 
   <section class="bars" id="bars" aria-label="ความมั่นใจของแต่ละประเภท"></section>
+  <section class="bars" id="board" style="margin-top:12px" hidden><strong>อันดับสัปดาห์นี้</strong><ol id="boardList" style="padding-left:22px;margin:8px 0"></ol><div class="note" id="resetInfo" style="margin:0"></div></section>
   <p class="note">AI ทายได้เฉพาะประเภทที่เคยเรียนรู้จากรูปตัวอย่าง หากความมั่นใจต่ำกว่า 70% ระบบจะแจ้งว่าไม่แน่ใจ</p>
 </main>
 
@@ -93,7 +111,7 @@ function colorOf(name){
   return "";
 }
 
-function showResult(preds){
+function renderResult(preds){
   preds.forEach((p,i)=>{
     $("pct"+i).textContent=(p.probability*100).toFixed(0)+"%";
     $("fill"+i).style.width=(p.probability*100)+"%";
@@ -110,12 +128,91 @@ function showResult(preds){
     r.innerHTML='<div class="big"></div><div class="pct">ทิ้งถังนี้ · ความมั่นใจ '+pct+'%</div>';
     r.querySelector(".big").textContent=top.className;
   }
+  return top;
+}
+
+// ===== ระบบคะแนน =====
+// วาง Web app URL จาก Google Apps Script ตรงนี้ (เว้นว่าง = เก็บคะแนนในเครื่องอย่างเดียว ไม่มีฐานข้อมูล)
+const API_URL = "https://script.google.com/macros/s/AKfycbykFPOo_QHDpb3TPOrtme2-qMRs1UgRW4GlyqhcoS9lJySNwKK63kDeaBS_wmb7AJ77/exec";
+const useServer = !!API_URL;
+const POINTS = {y:10, g:5, b:2};          // เหลือง 10 / เขียว 5 / น้ำเงิน 2 / ไม่มีขยะ 0
+const BIN_NAME = {y:"ถังสีเหลือง", g:"ถังสีเขียว", b:"ถังสีน้ำเงิน"};
+const SCORE_THRESHOLD = 0.8;               // ต้องมั่นใจ 80% ขึ้นไปถึงได้คะแนน
+const HOLD_MS = 1500;                      // โหมดกล้อง: ต้องค้างให้ AI เห็นนิ่งๆ 1.5 วินาที
+let score = {total:0,y:0,g:0,b:0};
+let stableKey = null, stableSince = 0, locked = false, toastTimer;
+
+const student = () => $("who").value.trim().slice(0,30);
+
+async function api(params, body){
+  const url = API_URL + (params ? "?"+new URLSearchParams(params) : "");
+  const res = await fetch(url, body ? {method:"POST", body:JSON.stringify(body)} : {});
+  return res.json();
+}
+function loadScore(){
+  try{ $("who").value = localStorage.getItem("wasteWho")||""; }catch(_){}
+  $("board").hidden = !useServer;
+  $("resetBtn").hidden = useServer;          // โหมดฐานข้อมูลรีเซ็ตอัตโนมัติทุกวันจันทร์
+  if(useServer){ refreshMe(); refreshBoard(); return; }
+  try{ const s = JSON.parse(localStorage.getItem("wasteScore")||"null"); if(s) score = s; }catch(_){}
+  renderScore();
+}
+function saveScore(){ try{ localStorage.setItem("wasteScore", JSON.stringify(score)); }catch(_){} }
+function renderScore(){
+  $("total").textContent = score.total;
+  $("detail").textContent = "ถังเหลือง "+score.y+" ครั้ง · ถังเขียว "+score.g+" ครั้ง · ถังน้ำเงิน "+score.b+" ครั้ง";
+}
+async function refreshMe(){
+  if(!useServer) return;
+  if(!student()){ score={total:0,y:0,g:0,b:0}; renderScore(); return; }
+  try{ const d = await api({action:"me", student:student()}); if(d.ok){ score=d.score; renderScore(); } }catch(_){}
+}
+async function refreshBoard(){
+  if(!useServer) return;
+  try{
+    const d = await api({action:"board"}); if(!d.ok) return;
+    const ol = $("boardList"); ol.innerHTML = "";
+    d.top.forEach(r=>{ const li=document.createElement("li"); li.textContent = r.student+" — "+r.total+" คะแนน"; ol.appendChild(li); });
+    if(!d.top.length){ const li=document.createElement("li"); li.textContent="ยังไม่มีใครได้คะแนนสัปดาห์นี้"; ol.appendChild(li); }
+    const when = new Date(d.resetsOn+"T00:00:00").toLocaleDateString("th-TH",{day:"numeric",month:"long"});
+    $("resetInfo").textContent = "คะแนนรีเซ็ตอัตโนมัติทุกวันจันทร์ (ครั้งถัดไป "+when+")";
+  }catch(_){}
+}
+function showToast(txt, sub){
+  const t=$("toast"); t.hidden=false; t.textContent=txt;
+  const s=document.createElement("small"); s.textContent=sub; t.appendChild(s);
+  clearTimeout(toastTimer); toastTimer=setTimeout(()=>{t.hidden=true;},2500);
+}
+async function award(top){
+  const c = colorOf(top.className), pts = POINTS[c];
+  if(!pts) return;
+  if(!student()){ showToast("กรอกชื่อก่อนนะ","ต้องมีชื่อเพื่อบันทึกคะแนน"); $("who").focus(); return; }
+  const info = BIN_NAME[c]+" · "+top.className;
+  if(!useServer){
+    score.total += pts; score[c]++; saveScore(); renderScore();
+    showToast("+"+pts+" คะแนน", info); return;
+  }
+  try{
+    const d = await api(null, {action:"add", student:student(), bin:c});
+    if(d.ok){ score=d.score; renderScore(); showToast("+"+pts+" คะแนน", info); refreshBoard(); }
+    else showToast("บันทึกไม่สำเร็จ", d.error||"ลองใหม่อีกครั้ง");
+  }catch(_){ showToast("บันทึกไม่สำเร็จ","ตรวจสอบอินเทอร์เน็ต"); }
+}
+function handle(preds, fromCam){
+  const top = renderResult(preds);
+  const ok = top.probability >= SCORE_THRESHOLD && POINTS[colorOf(top.className)];
+  if(!fromCam){ if(ok) award(top); return; }
+  const now = Date.now();
+  if(!ok){ stableKey=null; locked=false; return; }          // เอาขยะออก = ปลดล็อกให้สแกนชิ้นต่อไป
+  if(locked){ $("result").querySelector(".pct").textContent="ได้คะแนนแล้ว เอาขยะออกก่อนสแกนชิ้นต่อไป"; return; }
+  if(top.className !== stableKey){ stableKey = top.className; stableSince = now; return; }
+  if(now - stableSince >= HOLD_MS){ award(top); locked = true; }
 }
 
 async function loop(){
   if(!running) return;
   webcam.update();
-  showResult(await model.predict(webcam.canvas));
+  handle(await model.predict(webcam.canvas), true);
   requestAnimationFrame(loop);
 }
 
@@ -158,10 +255,15 @@ $("file").onchange=e=>{
   const img=new Image();
   img.onload=async()=>{
     $("view").innerHTML=""; $("view").appendChild(img);
-    showResult(await model.predict(img));
+    handle(await model.predict(img), false);
   };
   img.src=URL.createObjectURL(f);
+  e.target.value="";
 };
+$("who").oninput=e=>{ try{ localStorage.setItem("wasteWho", e.target.value); }catch(_){} };
+$("who").onchange=refreshMe;
+$("resetBtn").onclick=()=>{ if(confirm("ต้องการรีเซ็ตคะแนนเป็น 0 ใช่หรือไม่?")){ score={total:0,y:0,g:0,b:0}; saveScore(); renderScore(); } };
+loadScore();
 
 (async function init(){
   try{
