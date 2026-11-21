@@ -46,6 +46,7 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--accent);outline
 .score .total{font-size:2.6rem;font-weight:800;line-height:1;color:var(--accent)}
 .score .detail{grid-column:1/-1;color:var(--mute);font-size:.9rem}
 .score .btn{padding:8px 14px}
+.mine{text-align:center;font-weight:600;font-size:1.1rem;margin:-4px 0 14px;color:var(--accent)}
 #toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--accent);color:#fff;padding:14px 22px;border-radius:12px;font-weight:800;font-size:1.3rem;box-shadow:0 4px 16px #0004;z-index:9}
 #toast small{display:block;font-weight:400;font-size:.85rem;opacity:.9}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
@@ -86,6 +87,8 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--accent);outline
     <div class="big">รอผลการทาย</div>
     <div class="pct">เปิดกล้องหรืออัปโหลดรูปเพื่อเริ่ม</div>
   </div>
+
+  <div class="mine" id="mine" aria-live="polite"></div>
 
   <section class="bars" id="bars" aria-label="ความมั่นใจของแต่ละประเภท"></section>
   <section class="bars" id="board" style="margin-top:12px" hidden><strong>อันดับสัปดาห์นี้</strong><ol id="boardList" style="padding-left:22px;margin:8px 0"></ol><div class="note" id="resetInfo" style="margin:0"></div></section>
@@ -160,6 +163,7 @@ function loadScore(){
 function saveScore(){ try{ localStorage.setItem("wasteScore", JSON.stringify(score)); }catch(_){} }
 function renderScore(){
   $("total").textContent = score.total;
+  $("mine").textContent = (student() ? student()+" · " : "")+"คะแนนสะสมสัปดาห์นี้ "+score.total+" คะแนน";
   $("detail").textContent = "ถังเหลือง "+score.y+" ครั้ง · ถังเขียว "+score.g+" ครั้ง · ถังน้ำเงิน "+score.b+" ครั้ง";
 }
 async function refreshMe(){
@@ -172,7 +176,7 @@ async function refreshBoard(){
   try{
     const d = await api({action:"board"}); if(!d.ok) return;
     const ol = $("boardList"); ol.innerHTML = "";
-    d.top.forEach(r=>{ const li=document.createElement("li"); li.textContent = r.student+" — "+r.total+" คะแนน"; ol.appendChild(li); });
+    d.top.forEach(r=>{ const li=document.createElement("li"); li.textContent = r.student+" — "+r.total+" คะแนน"+(r.student===student()?" (คุณ)":""); if(r.student===student()) li.style.fontWeight="800"; ol.appendChild(li); });
     if(!d.top.length){ const li=document.createElement("li"); li.textContent="ยังไม่มีใครได้คะแนนสัปดาห์นี้"; ol.appendChild(li); }
     const when = new Date(d.resetsOn+"T00:00:00").toLocaleDateString("th-TH",{day:"numeric",month:"long"});
     $("resetInfo").textContent = "คะแนนรีเซ็ตอัตโนมัติทุกวันจันทร์ (ครั้งถัดไป "+when+")";
@@ -190,11 +194,11 @@ async function award(top){
   const info = BIN_NAME[c]+" · "+top.className;
   if(!useServer){
     score.total += pts; score[c]++; saveScore(); renderScore();
-    showToast("+"+pts+" คะแนน", info); return;
+    showToast("+"+pts+" คะแนน", info+" · รวม "+score.total+" คะแนน"); return;
   }
   try{
     const d = await api(null, {action:"add", student:student(), bin:c});
-    if(d.ok){ score=d.score; renderScore(); showToast("+"+pts+" คะแนน", info); refreshBoard(); }
+    if(d.ok){ score=d.score; renderScore(); showToast("+"+pts+" คะแนน", info+" · รวม "+score.total+" คะแนน"); refreshBoard(); }
     else showToast("บันทึกไม่สำเร็จ", d.error||"ลองใหม่อีกครั้ง");
   }catch(_){ showToast("บันทึกไม่สำเร็จ","ตรวจสอบอินเทอร์เน็ต"); }
 }
