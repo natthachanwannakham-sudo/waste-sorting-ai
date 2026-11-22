@@ -205,7 +205,7 @@ const BIN_NAME = {y:"ถังสีเหลือง", g:"ถังสีเ�
 const SCORE_THRESHOLD = 0.8;               // ต้องมั่นใจ 80% ขึ้นไปถึงได้คะแนน
 const HOLD_MS = 1500;                      // โหมดกล้อง: ต้องค้างให้ AI เห็นนิ่งๆ 1.5 วินาที
 let score = {total:0,y:0,g:0,b:0};
-let stableKey = null, stableSince = 0, locked = false, toastTimer;
+let stableKey = null, stableSince = 0, locked = false, lockedKey = "", toastTimer, readyTimer;
 
 const student = () => $("who").value.trim().slice(0,30);
 
@@ -283,6 +283,11 @@ function showToast(txt, sub){
   const s=document.createElement("small"); s.textContent=sub; t.appendChild(s);
   clearTimeout(toastTimer); toastTimer=setTimeout(()=>{t.hidden=true;},2500);
 }
+// หลังนับคะแนนเสร็จ: โหมดอัปโหลดจะล้างรูปออกให้พร้อมชิ้นถัดไป (ผลและการ์ดความรู้ยังอยู่ให้อ่าน)
+function nextReady(){
+  clearTimeout(readyTimer);
+  readyTimer=setTimeout(()=>{ if(mode==="up") $("view").innerHTML="<span>พร้อมสแกนชิ้นถัดไป · กด “เลือกรูปขยะ”</span>"; }, 2500);
+}
 async function award(top, g){
   const c = colorOf(top.className), pts = POINTS[c];
   if(!pts) return;
@@ -291,11 +296,11 @@ async function award(top, g){
   const info = (g ? (hit?"ทายตรง AI ✓ · ":"ไม่ตรง AI (คุณทาย"+BIN_NAME[g]+") · ") : "")+BIN_NAME[c]+" · "+top.className;
   if(!useServer){
     const bn=(g&&hit)?1:0; score.total += pts+bn; score[c]++; if(g){ score.gt=(score.gt||0)+1; if(hit) score.gm=(score.gm||0)+1; } saveScore(); renderScore();
-    showToast("+"+(pts+bn)+" คะแนน", info+(bn?" · โบนัสทายถูก +1":"")+" · รวม "+score.total+" คะแนน"); pushHist(BIN_NAME[c], pts+bn); return;
+    showToast("+"+(pts+bn)+" คะแนน", info+(bn?" · โบนัสทายถูก +1":"")+" · รวม "+score.total+" คะแนน"); pushHist(BIN_NAME[c], pts+bn); nextReady(); return;
   }
   try{
     const d = await api(null, {action:"add", student:student(), bin:c, guess:g||""});
-    if(d.ok){ const bo=d.bonus||0; score=d.score; renderScore(); showToast("+"+(pts+bo)+" คะแนน", info+(bo?" · โบนัสทายถูก +1":"")+" · รวม "+score.total+" คะแนน"); pushHist(BIN_NAME[c], pts+bo); refreshBoard(); }
+    if(d.ok){ const bo=d.bonus||0; score=d.score; renderScore(); showToast("+"+(pts+bo)+" คะแนน", info+(bo?" · โบนัสทายถูก +1":"")+" · รวม "+score.total+" คะแนน"); pushHist(BIN_NAME[c], pts+bo); refreshBoard(); nextReady(); }
     else showToast("บันทึกไม่สำเร็จ", d.error||"ลองใหม่อีกครั้ง");
   }catch(_){ showToast("บันทึกไม่สำเร็จ","ตรวจสอบอินเทอร์เน็ต"); }
 }
@@ -319,9 +324,12 @@ function handle(preds, fromCam){
   if(!fromCam){ if(ok){ award(top, guess); if(predictMode) setGuess(""); } return; }
   const now = Date.now();
   if(!ok){ stableKey=null; if(locked){ locked=false; if(predictMode) setGuess(""); } return; }   // เอาขยะออก = ปลดล็อก
-  if(locked){ $("result").querySelector(".pct").textContent="ได้คะแนนแล้ว เอาขยะออกก่อนสแกนชิ้นต่อไป"; return; }
+  if(locked){
+    if(top.className !== lockedKey){ locked=false; stableKey=top.className; stableSince=now; if(predictMode) setGuess(""); return; }  // เปลี่ยนเป็นขยะประเภทอื่น = พร้อมสแกนชิ้นถัดไปทันที
+    $("result").querySelector(".pct").textContent="ได้คะแนนแล้ว · พร้อมชิ้นถัดไป (เอาขยะออก หรือเปลี่ยนเป็นชิ้นอื่น)"; return;
+  }
   if(top.className !== stableKey){ stableKey = top.className; stableSince = now; return; }
-  if(now - stableSince >= HOLD_MS){ award(top, guess); locked = true; }
+  if(now - stableSince >= HOLD_MS){ award(top, guess); locked = true; lockedKey = top.className; }
 }
 
 async function loop(){
@@ -366,7 +374,7 @@ $("tabUp").onclick=()=>setMode("up");
 $("startBtn").onclick=()=> running ? (stopCam(), $("view").innerHTML="<span>ปิดกล้องแล้ว</span>") : startCam();
 $("flipBtn").onclick=()=>{ facing = facing==="user"?"environment":"user"; if(running) startCam(); };
 $("file").onchange=e=>{
-  const f=e.target.files[0]; if(!f) return;
+  clearTimeout(readyTimer); const f=e.target.files[0]; if(!f) return;
   const img=new Image();
   img.onload=async()=>{
     $("view").innerHTML=""; $("view").appendChild(img);
