@@ -77,7 +77,7 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--accent);outline
     <button id="tabUp" aria-pressed="false">อัปโหลดรูป</button>
   </div>
 
-  <label class="opt"><input type="checkbox" id="predictOn"> โหมดทายก่อนสแกน (คิดก่อน แล้ว AI เฉลย)</label>
+  <label class="opt"><input type="checkbox" id="predictOn"> โหมดทายก่อนสแกน (ทายตรง AI ได้ +1 คะแนน)</label>
   <div class="row" id="guessBox" style="margin:0 0 12px" hidden>
     <button class="btn gb" data-g="y" style="background:var(--y);color:#2a2000" aria-pressed="false">เหลือง (รีไซเคิล)</button>
     <button class="btn gb" data-g="g" style="background:var(--g)" aria-pressed="false">เขียว (อินทรีย์)</button>
@@ -112,9 +112,10 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--accent);outline
 
     <details class="bars" id="hist" style="margin-bottom:12px"><summary style="cursor:pointer;font-weight:800">ประวัติการสแกนล่าสุด (กดเพื่อดู)</summary><ul id="histList" style="padding-left:20px;margin:8px 0"></ul></details>
 
-  <details class="bars" id="quizBox" style="margin-bottom:12px"><summary style="cursor:pointer;font-weight:800">แบบทดสอบ 5 ข้อ (ก่อน/หลังเรียน)</summary>
+  <details class="bars" id="quizBox" style="margin-bottom:12px"><summary style="cursor:pointer;font-weight:800">แบบทดสอบ</summary>
+    <p class="note" style="margin:8px 0 0">ทำก่อนเริ่มสแกนขยะของวัน ถ้าตอบถูกครบ 5 ข้อในครั้งแรกของวัน ได้โบนัส +1 คะแนน</p>
     <p id="quizStat" style="color:var(--mute);margin:8px 0"></p>
-    <div class="row"><button class="btn alt" id="quizPre">เริ่มก่อนเรียน</button><button class="btn alt" id="quizPost">เริ่มหลังเรียน</button></div>
+    <div class="row"><button class="btn" id="quizGo">เริ่มทำแบบทดสอบ</button></div>
     <div id="quizArea" style="margin-top:12px"></div></details>
 
   <section class="bars" id="bars" aria-label="ความมั่นใจของแต่ละประเภท"></section>
@@ -247,7 +248,7 @@ async function refreshHist(){
   if(!useServer || !student()) return;
   try{
     const d = await api({action:"history", student:student()});
-    if(d.ok && d.items){ hist = d.items.map(i=>({t:i.t, name:BIN_NAME[i.bin]||i.bin, pts:i.pts})); renderHist(); }
+    if(d.ok && d.items){ hist = d.items.map(i=>({t:i.t, name:BIN_NAME[i.bin]||(i.bin==="quiz"?"โบนัสแบบทดสอบ":i.bin), pts:i.pts})); renderHist(); }
   }catch(_){}
 }
 async function refreshMe(){
@@ -289,12 +290,12 @@ async function award(top, g){
   const hit = g===c;
   const info = (g ? (hit?"ทายตรง AI ✓ · ":"ไม่ตรง AI (คุณทาย"+BIN_NAME[g]+") · ") : "")+BIN_NAME[c]+" · "+top.className;
   if(!useServer){
-    score.total += pts; score[c]++; if(g){ score.gt=(score.gt||0)+1; if(hit) score.gm=(score.gm||0)+1; } saveScore(); renderScore();
-    showToast("+"+pts+" คะแนน", info+" · รวม "+score.total+" คะแนน"); pushHist(BIN_NAME[c], pts); return;
+    const bn=(g&&hit)?1:0; score.total += pts+bn; score[c]++; if(g){ score.gt=(score.gt||0)+1; if(hit) score.gm=(score.gm||0)+1; } saveScore(); renderScore();
+    showToast("+"+(pts+bn)+" คะแนน", info+(bn?" · โบนัสทายถูก +1":"")+" · รวม "+score.total+" คะแนน"); pushHist(BIN_NAME[c], pts+bn); return;
   }
   try{
     const d = await api(null, {action:"add", student:student(), bin:c, guess:g||""});
-    if(d.ok){ score=d.score; renderScore(); showToast("+"+pts+" คะแนน", info+" · รวม "+score.total+" คะแนน"); pushHist(BIN_NAME[c], pts); refreshBoard(); }
+    if(d.ok){ const bo=d.bonus||0; score=d.score; renderScore(); showToast("+"+(pts+bo)+" คะแนน", info+(bo?" · โบนัสทายถูก +1":"")+" · รวม "+score.total+" คะแนน"); pushHist(BIN_NAME[c], pts+bo); refreshBoard(); }
     else showToast("บันทึกไม่สำเร็จ", d.error||"ลองใหม่อีกครั้ง");
   }catch(_){ showToast("บันทึกไม่สำเร็จ","ตรวจสอบอินเทอร์เน็ต"); }
 }
@@ -387,13 +388,13 @@ const QUIZ = [
  {q:"ขยะอินทรีย์นำไปทำอะไรได้?", o:["ปุ๋ยหมักหรือก๊าซชีวภาพ","ขวดพลาสติกใหม่","แก้วใหม่"], e:"ย่อยสลายแล้วนำไปทำปุ๋ยหมักหรือก๊าซชีวภาพได้"},
  {q:"ทำไมต้องล้างขวดให้สะอาดก่อนทิ้งถังรีไซเคิล?", o:["ให้ขวดดูสวย","เศษอาหารที่ติดอยู่ทำให้รีไซเคิลไม่ได้","ให้ขวดหนักขึ้น"], e:"เศษอาหารทำให้ขยะรีไซเคิลเปื้อนจนนำกลับไปใช้ไม่ได้"}
 ];
-let qPhase="", qAns=[], qIdx=0;
+let qNote="", qAns=[], qIdx=0;
 function showQuizStat(q){
-  $("quizStat").textContent = !q ? "" : "ก่อนเรียน: "+(q.pre==null?"-":q.pre+"/"+QUIZ.length)+" · หลังเรียน: "+(q.post==null?"-":q.post+"/"+QUIZ.length)+((q.pre!=null&&q.post!=null)?" (เปลี่ยน "+(q.post-q.pre>=0?"+":"")+(q.post-q.pre)+")":"");
+  $("quizStat").textContent = "แบบทดสอบวันนี้: "+((q&&q.today!=null)?q.today+"/"+QUIZ.length:"ยังไม่ได้ทำ");
 }
-function quizStart(ph){
+function quizStart(){
   if(!student()){ showToast("กรอกชื่อก่อนนะ","ต้องมีชื่อเพื่อบันทึกผล"); $("who").focus(); return; }
-  qPhase=ph; qAns=[]; qIdx=0; quizShow();
+  qAns=[]; qIdx=0; quizShow();
 }
 function quizShow(){
   const a=$("quizArea"); a.innerHTML="";
@@ -404,18 +405,18 @@ function quizShow(){
   });
 }
 async function quizDone(){
-  const a=$("quizArea"); a.textContent="กำลังบันทึก…"; let key=QUIZ_KEY;
+  const a=$("quizArea"); a.textContent="กำลังบันทึก…"; qNote=""; let key=QUIZ_KEY;
   if(useServer){
-    try{ const d=await api(null,{action:"quiz",student:student(),phase:qPhase,answers:qAns}); if(!d.ok){ a.textContent=d.error||"บันทึกไม่สำเร็จ"; return; } key=d.key; }
+    try{ const d=await api(null,{action:"quiz",student:student(),answers:qAns}); if(!d.ok){ a.textContent=d.error||"บันทึกไม่สำเร็จ"; return; } key=d.key; qNote=d.bonus?"🎉 ตอบถูกครบ ได้โบนัส +1 คะแนน":(d.note||""); }
     catch(_){ a.textContent="บันทึกไม่สำเร็จ ตรวจสอบอินเทอร์เน็ต"; return; }
   }
   const sc=qAns.filter((v,i)=>v===key[i]).length; a.innerHTML="";
   const h=document.createElement("p"); h.style.fontWeight="800"; h.textContent="ได้ "+sc+"/"+QUIZ.length+" คะแนน"; a.appendChild(h);
+  if(qNote){ const n=document.createElement("p"); n.textContent=qNote; a.appendChild(n); }
   QUIZ.forEach((q,i)=>{ const p=document.createElement("p"); p.textContent=(qAns[i]===key[i]?"✓ ":"✗ ")+q.q+" → "+q.o[key[i]]+" ("+q.e+")"; a.appendChild(p); });
-  refreshMe();
+  refreshMe(); refreshBoard(); refreshHist();
 }
-$("quizPre").onclick=()=>quizStart("pre");
-$("quizPost").onclick=()=>quizStart("post");
+$("quizGo").onclick=()=>quizStart();
 
 // ===== สรุปผลสำหรับครู =====
 $("sumBtn").onclick=async()=>{
@@ -430,8 +431,8 @@ $("sumBtn").onclick=async()=>{
     add("p","นักเรียนที่ร่วมกิจกรรม: "+d.students+" คน");
     ["y","g","b"].forEach(k=>{ const b=d.bins[k]; add("p",BIN_NAME[k]+": สแกน "+b.n+" ครั้ง · ทายก่อนสแกน "+b.g+" ครั้ง ตรง AI "+(b.g?Math.round(100*b.m/b.g)+"%":"-"),"margin:4px 0"); });
     const z=d.quiz;
-    add("p","แบบทดสอบ ก่อนเรียน เฉลี่ย "+z.pre.avg.toFixed(2)+"/"+z.total+" ("+z.pre.n+" คน) · หลังเรียน เฉลี่ย "+z.post.avg.toFixed(2)+"/"+z.total+" ("+z.post.n+" คน)");
-    QUIZ.forEach((q,i)=>add("p","ข้อ "+(i+1)+" ตอบถูก ก่อน "+z.pre.perQ[i]+"/"+z.pre.n+" · หลัง "+z.post.perQ[i]+"/"+z.post.n,"margin:2px 0;font-size:.9rem"));
+    add("p","แบบทดสอบสัปดาห์นี้: ทำแล้ว "+z.n+" ครั้ง (นับนักเรียน-วัน) · คะแนนเฉลี่ย "+z.avg.toFixed(2)+"/"+z.total+" · ตอบถูกครบ "+z.perfect+" ครั้ง");
+    QUIZ.forEach((q,i)=>add("p","ข้อ "+(i+1)+" ตอบถูก "+z.perQ[i]+"/"+z.n,"margin:2px 0;font-size:.9rem"));
     add("p","ข้อที่ถูกน้อย = เรื่องที่ควรสอนซ้ำ · ถังที่ทายตรง AI ต่ำ = นักเรียนยังสับสนถังนั้น","color:var(--mute);font-size:.85rem");
     const c=add("button","ปิด"); c.className="btn alt"; c.onclick=()=>{ t.hidden=true; };
     t.scrollIntoView({behavior:"smooth"});
