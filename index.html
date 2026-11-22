@@ -47,6 +47,8 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--accent);outline
 .score .detail{grid-column:1/-1;color:var(--mute);font-size:.9rem}
 .score .btn{padding:8px 14px}
 .btn.danger{background:#c62828;color:#fff}
+.gb[aria-pressed=true]{outline:4px solid var(--ink)}
+.opt{display:flex;gap:8px;align-items:center;margin:0 0 12px;font-weight:600}
 .why{background:var(--card);border:1px solid var(--line);border-left:8px solid var(--n);border-radius:12px;padding:12px 16px;margin:0 0 12px}
 .why.y{border-left-color:var(--y)}.why.b{border-left-color:var(--b)}.why.g{border-left-color:var(--g)}
 .why h2{font-size:1.1rem;margin:0 0 8px}
@@ -73,6 +75,13 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--accent);outline
   <div class="tabs" role="group" aria-label="เลือกโหมด">
     <button id="tabCam" aria-pressed="true">ใช้กล้อง</button>
     <button id="tabUp" aria-pressed="false">อัปโหลดรูป</button>
+  </div>
+
+  <label class="opt"><input type="checkbox" id="predictOn"> โหมดทายก่อนสแกน (คิดก่อน แล้ว AI เฉลย)</label>
+  <div class="row" id="guessBox" style="margin:0 0 12px" hidden>
+    <button class="btn gb" data-g="y" style="background:var(--y);color:#2a2000" aria-pressed="false">เหลือง (รีไซเคิล)</button>
+    <button class="btn gb" data-g="g" style="background:var(--g)" aria-pressed="false">เขียว (อินทรีย์)</button>
+    <button class="btn gb" data-g="b" style="background:var(--b)" aria-pressed="false">น้ำเงิน (ทั่วไป)</button>
   </div>
 
   <section class="stage">
@@ -103,12 +112,19 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--accent);outline
 
     <details class="bars" id="hist" style="margin-bottom:12px"><summary style="cursor:pointer;font-weight:800">ประวัติการสแกนล่าสุด (กดเพื่อดู)</summary><ul id="histList" style="padding-left:20px;margin:8px 0"></ul></details>
 
+  <details class="bars" id="quizBox" style="margin-bottom:12px"><summary style="cursor:pointer;font-weight:800">แบบทดสอบ 5 ข้อ (ก่อน/หลังเรียน)</summary>
+    <p id="quizStat" style="color:var(--mute);margin:8px 0"></p>
+    <div class="row"><button class="btn alt" id="quizPre">เริ่มก่อนเรียน</button><button class="btn alt" id="quizPost">เริ่มหลังเรียน</button></div>
+    <div id="quizArea" style="margin-top:12px"></div></details>
+
   <section class="bars" id="bars" aria-label="ความมั่นใจของแต่ละประเภท"></section>
   <section class="bars" id="board" style="margin-top:12px" hidden><strong>อันดับสัปดาห์นี้</strong><ol id="boardList" style="padding-left:22px;margin:8px 0"></ol><div class="note" id="resetInfo" style="margin:0"></div></section>
   <p class="note">AI ทายได้เฉพาะประเภทที่เคยเรียนรู้จากรูปตัวอย่าง หากความมั่นใจต่ำกว่า 70% ระบบจะแจ้งว่าไม่แน่ใจ</p>
   <div style="margin-top:32px;padding-top:16px;border-top:1px solid var(--line);text-align:center">
+    <button class="btn alt" id="sumBtn">สรุปผลสำหรับครู</button>
     <button class="btn danger" id="resetAllBtn">รีเซ็ตคะแนนทั้งหมด (สำหรับครู)</button>
   </div>
+  <section class="bars" id="teacher" style="margin-top:12px" hidden></section>
 </main>
 
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.3.1/dist/tf.min.js"></script>
@@ -208,7 +224,7 @@ function loadScore(){
 function saveScore(){ try{ localStorage.setItem("wasteScore", JSON.stringify(score)); }catch(_){} }
 function renderScore(){
   $("total").textContent = score.total;
-  $("detail").textContent = "ถังเหลือง "+score.y+" ครั้ง · ถังเขียว "+score.g+" ครั้ง · ถังน้ำเงิน "+score.b+" ครั้ง";
+  $("detail").textContent = "ถังเหลือง "+score.y+" ครั้ง · ถังเขียว "+score.g+" ครั้ง · ถังน้ำเงิน "+score.b+" ครั้ง"+(score.gt?" · ทายตรง AI "+(score.gm||0)+"/"+score.gt:"");
 }
 let hist = [];
 const histKey = () => "wasteHist:"+student();
@@ -237,7 +253,7 @@ async function refreshHist(){
 async function refreshMe(){
   if(!useServer) return;
   if(!student()){ score={total:0,y:0,g:0,b:0}; renderScore(); return; }
-  try{ const d = await api({action:"me", student:student()}); if(d.ok){ score=d.score; renderScore(); } }catch(_){}
+  try{ const d = await api({action:"me", student:student()}); if(d.ok){ score=d.score; renderScore(); showQuizStat(d.quiz); } }catch(_){}
 }
 async function refreshBoard(){
   if(!useServer) return;
@@ -266,30 +282,45 @@ function showToast(txt, sub){
   const s=document.createElement("small"); s.textContent=sub; t.appendChild(s);
   clearTimeout(toastTimer); toastTimer=setTimeout(()=>{t.hidden=true;},2500);
 }
-async function award(top){
+async function award(top, g){
   const c = colorOf(top.className), pts = POINTS[c];
   if(!pts) return;
   if(!student()){ showToast("กรอกชื่อก่อนนะ","ต้องมีชื่อเพื่อบันทึกคะแนน"); $("who").focus(); return; }
-  const info = BIN_NAME[c]+" · "+top.className;
+  const hit = g===c;
+  const info = (g ? (hit?"ทายตรง AI ✓ · ":"ไม่ตรง AI (คุณทาย"+BIN_NAME[g]+") · ") : "")+BIN_NAME[c]+" · "+top.className;
   if(!useServer){
-    score.total += pts; score[c]++; saveScore(); renderScore();
+    score.total += pts; score[c]++; if(g){ score.gt=(score.gt||0)+1; if(hit) score.gm=(score.gm||0)+1; } saveScore(); renderScore();
     showToast("+"+pts+" คะแนน", info+" · รวม "+score.total+" คะแนน"); pushHist(BIN_NAME[c], pts); return;
   }
   try{
-    const d = await api(null, {action:"add", student:student(), bin:c});
+    const d = await api(null, {action:"add", student:student(), bin:c, guess:g||""});
     if(d.ok){ score=d.score; renderScore(); showToast("+"+pts+" คะแนน", info+" · รวม "+score.total+" คะแนน"); pushHist(BIN_NAME[c], pts); refreshBoard(); }
     else showToast("บันทึกไม่สำเร็จ", d.error||"ลองใหม่อีกครั้ง");
   }catch(_){ showToast("บันทึกไม่สำเร็จ","ตรวจสอบอินเทอร์เน็ต"); }
 }
+let guess = "", predictMode = false;
+function setGuess(g){ guess=g; document.querySelectorAll("#guessBox button").forEach(b=>b.setAttribute("aria-pressed", b.dataset.g===g)); }
+function topOf(p){ return p.reduce((a,b)=>a.probability>b.probability?a:b); }
+function gate(){
+  const r=$("result"); r.className="";
+  r.innerHTML='<div class="big">ทายก่อนนะ</div><div class="pct">เลือกถังที่คิดว่าใช่ แล้ว AI จะเฉลย</div>';
+  $("why").hidden=true; $("bars").hidden=true;
+}
 function handle(preds, fromCam){
+  const t0 = topOf(preds);
+  if(predictMode && !guess){
+    if(fromCam && !(t0.probability >= SCORE_THRESHOLD && POINTS[colorOf(t0.className)])){ stableKey=null; locked=false; }
+    gate(); return;
+  }
+  $("bars").hidden=false;
   const top = renderResult(preds);
   const ok = top.probability >= SCORE_THRESHOLD && POINTS[colorOf(top.className)];
-  if(!fromCam){ if(ok) award(top); return; }
+  if(!fromCam){ if(ok){ award(top, guess); if(predictMode) setGuess(""); } return; }
   const now = Date.now();
-  if(!ok){ stableKey=null; locked=false; return; }          // เอาขยะออก = ปลดล็อกให้สแกนชิ้นต่อไป
+  if(!ok){ stableKey=null; if(locked){ locked=false; if(predictMode) setGuess(""); } return; }   // เอาขยะออก = ปลดล็อก
   if(locked){ $("result").querySelector(".pct").textContent="ได้คะแนนแล้ว เอาขยะออกก่อนสแกนชิ้นต่อไป"; return; }
   if(top.className !== stableKey){ stableKey = top.className; stableSince = now; return; }
-  if(now - stableSince >= HOLD_MS){ award(top); locked = true; }
+  if(now - stableSince >= HOLD_MS){ award(top, guess); locked = true; }
 }
 
 async function loop(){
@@ -342,6 +373,69 @@ $("file").onchange=e=>{
   };
   img.src=URL.createObjectURL(f);
   e.target.value="";
+};
+document.querySelectorAll("#guessBox button").forEach(b=>b.onclick=()=>setGuess(b.dataset.g));
+$("predictOn").onchange=e=>{ predictMode=e.target.checked; $("guessBox").hidden=!predictMode; setGuess(""); locked=false; stableKey=null; if(!predictMode) $("bars").hidden=false; };
+$("file").onclick=e=>{ if(predictMode && !guess){ e.preventDefault(); showToast("ทายก่อนนะ","เลือกถังที่คิดว่าใช่ก่อนอัปโหลดรูป"); } };
+
+// ===== แบบทดสอบก่อน/หลังเรียน (แก้คำถามที่นี่ และแก้เฉลย QUIZ_KEY ใน Code.gs ให้ตรงกัน) =====
+const QUIZ_KEY = [0,1,2,0,1];
+const QUIZ = [
+ {q:"ขวดน้ำพลาสติกที่ดื่มหมดและล้างสะอาดแล้ว ควรทิ้งถังสีอะไร?", o:["ถังสีเหลือง","ถังสีเขียว","ถังสีน้ำเงิน"], e:"รีไซเคิลได้ จึงทิ้งถังสีเหลือง"},
+ {q:"เปลือกกล้วยและเศษอาหารควรทิ้งถังสีอะไร?", o:["ถังสีเหลือง","ถังสีเขียว","ถังสีน้ำเงิน"], e:"เป็นขยะอินทรีย์ ย่อยสลายได้ จึงทิ้งถังสีเขียว"},
+ {q:"ถุงขนมและโฟมเปื้อนอาหารควรทิ้งถังสีอะไร?", o:["ถังสีเหลือง","ถังสีเขียว","ถังสีน้ำเงิน"], e:"ย่อยสลายยากและไม่คุ้มรีไซเคิล จึงทิ้งถังสีน้ำเงิน"},
+ {q:"ขยะอินทรีย์นำไปทำอะไรได้?", o:["ปุ๋ยหมักหรือก๊าซชีวภาพ","ขวดพลาสติกใหม่","แก้วใหม่"], e:"ย่อยสลายแล้วนำไปทำปุ๋ยหมักหรือก๊าซชีวภาพได้"},
+ {q:"ทำไมต้องล้างขวดให้สะอาดก่อนทิ้งถังรีไซเคิล?", o:["ให้ขวดดูสวย","เศษอาหารที่ติดอยู่ทำให้รีไซเคิลไม่ได้","ให้ขวดหนักขึ้น"], e:"เศษอาหารทำให้ขยะรีไซเคิลเปื้อนจนนำกลับไปใช้ไม่ได้"}
+];
+let qPhase="", qAns=[], qIdx=0;
+function showQuizStat(q){
+  $("quizStat").textContent = !q ? "" : "ก่อนเรียน: "+(q.pre==null?"-":q.pre+"/"+QUIZ.length)+" · หลังเรียน: "+(q.post==null?"-":q.post+"/"+QUIZ.length)+((q.pre!=null&&q.post!=null)?" (เปลี่ยน "+(q.post-q.pre>=0?"+":"")+(q.post-q.pre)+")":"");
+}
+function quizStart(ph){
+  if(!student()){ showToast("กรอกชื่อก่อนนะ","ต้องมีชื่อเพื่อบันทึกผล"); $("who").focus(); return; }
+  qPhase=ph; qAns=[]; qIdx=0; quizShow();
+}
+function quizShow(){
+  const a=$("quizArea"); a.innerHTML="";
+  const q=QUIZ[qIdx], h=document.createElement("p"); h.style.fontWeight="800"; h.textContent=(qIdx+1)+"/"+QUIZ.length+"  "+q.q; a.appendChild(h);
+  q.o.forEach((t,i)=>{
+    const b=document.createElement("button"); b.className="btn alt"; b.style.cssText="display:block;width:100%;margin:6px 0;text-align:left"; b.textContent=t;
+    b.onclick=()=>{ qAns.push(i); (++qIdx<QUIZ.length) ? quizShow() : quizDone(); }; a.appendChild(b);
+  });
+}
+async function quizDone(){
+  const a=$("quizArea"); a.textContent="กำลังบันทึก…"; let key=QUIZ_KEY;
+  if(useServer){
+    try{ const d=await api(null,{action:"quiz",student:student(),phase:qPhase,answers:qAns}); if(!d.ok){ a.textContent=d.error||"บันทึกไม่สำเร็จ"; return; } key=d.key; }
+    catch(_){ a.textContent="บันทึกไม่สำเร็จ ตรวจสอบอินเทอร์เน็ต"; return; }
+  }
+  const sc=qAns.filter((v,i)=>v===key[i]).length; a.innerHTML="";
+  const h=document.createElement("p"); h.style.fontWeight="800"; h.textContent="ได้ "+sc+"/"+QUIZ.length+" คะแนน"; a.appendChild(h);
+  QUIZ.forEach((q,i)=>{ const p=document.createElement("p"); p.textContent=(qAns[i]===key[i]?"✓ ":"✗ ")+q.q+" → "+q.o[key[i]]+" ("+q.e+")"; a.appendChild(p); });
+  refreshMe();
+}
+$("quizPre").onclick=()=>quizStart("pre");
+$("quizPost").onclick=()=>quizStart("post");
+
+// ===== สรุปผลสำหรับครู =====
+$("sumBtn").onclick=async()=>{
+  if(!useServer){ showToast("ต้องเชื่อมฐานข้อมูลก่อน","ใส่ API_URL ในโค้ด"); return; }
+  const pin=prompt("ใส่รหัสครูเพื่อดูสรุปผล"); if(!pin) return;
+  try{
+    const d=await api(null,{action:"summary",pin:pin});
+    if(!d.ok){ showToast("ดูสรุปไม่ได้", d.error||"ลองใหม่อีกครั้ง"); return; }
+    const t=$("teacher"); t.hidden=false; t.innerHTML="";
+    const add=(tag,txt,css)=>{ const e=document.createElement(tag); e.textContent=txt; if(css) e.style.cssText=css; t.appendChild(e); return e; };
+    add("strong","สรุปผลสำหรับครู (สัปดาห์เริ่ม "+d.week+")");
+    add("p","นักเรียนที่ร่วมกิจกรรม: "+d.students+" คน");
+    ["y","g","b"].forEach(k=>{ const b=d.bins[k]; add("p",BIN_NAME[k]+": สแกน "+b.n+" ครั้ง · ทายก่อนสแกน "+b.g+" ครั้ง ตรง AI "+(b.g?Math.round(100*b.m/b.g)+"%":"-"),"margin:4px 0"); });
+    const z=d.quiz;
+    add("p","แบบทดสอบ ก่อนเรียน เฉลี่ย "+z.pre.avg.toFixed(2)+"/"+z.total+" ("+z.pre.n+" คน) · หลังเรียน เฉลี่ย "+z.post.avg.toFixed(2)+"/"+z.total+" ("+z.post.n+" คน)");
+    QUIZ.forEach((q,i)=>add("p","ข้อ "+(i+1)+" ตอบถูก ก่อน "+z.pre.perQ[i]+"/"+z.pre.n+" · หลัง "+z.post.perQ[i]+"/"+z.post.n,"margin:2px 0;font-size:.9rem"));
+    add("p","ข้อที่ถูกน้อย = เรื่องที่ควรสอนซ้ำ · ถังที่ทายตรง AI ต่ำ = นักเรียนยังสับสนถังนั้น","color:var(--mute);font-size:.85rem");
+    const c=add("button","ปิด"); c.className="btn alt"; c.onclick=()=>{ t.hidden=true; };
+    t.scrollIntoView({behavior:"smooth"});
+  }catch(_){ showToast("ดูสรุปไม่ได้","ตรวจสอบอินเทอร์เน็ต"); }
 };
 $("who").oninput=e=>{ try{ localStorage.setItem("wasteWho", e.target.value); }catch(_){} };
 $("who").onchange=()=>{ refreshMe(); loadHistLocal(); renderHist(); refreshHist(); };
